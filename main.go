@@ -25,14 +25,17 @@ package main
 
 import (
 	// "bytes"
-	"crypto/rand"
-	"strings"
+	// "crypto/rand"
+	// "strings"
 	// "encoding/binary"
-	"encoding/json"
-	"errors"
-	// "fmt"
+	// "encoding/json"
+	// "errors"
+	"fmt"
 	"github.com/agl/ed25519"
-	"github.com/jtremback/upc/memdb"
+	"github.com/golang/protobuf/proto"
+	"github.com/jtremback/upc/buf"
+	// "github.com/jtremback/upc/memdb"
+	"log"
 )
 
 const (
@@ -40,6 +43,7 @@ const (
 	PrivateKeySize       = ed25519.PrivateKeySize
 	SignatureSize        = ed25519.SignatureSize
 	OpeningTxPayloadSize = 80
+	UpdateTxPayloadSize  = 1
 	ChannelIDSize        = 32
 )
 
@@ -59,6 +63,7 @@ type UpdateTx struct {
 	NetTransfer    int64
 	SequenceNumber uint32
 	Fast           bool
+	Conditions     []byte
 	Signature1     [SignatureSize]byte
 	Signature2     [SignatureSize]byte
 }
@@ -83,142 +88,203 @@ type Peer struct {
 }
 
 func main() {
-	db := leveldb.NewDB()
-	MakeIdentity("faulkner", db)
-	db.Print()
-}
-
-func makeLevelKey(indexes ...string) []byte {
-	return []byte(strings.Join(indexes, ":"))
-}
-
-func MakeKeypair() ([PublicKeySize]byte, [PrivateKeySize]byte, error) {
-	return ed25519.GenerateKey(rand.Reader)
-}
-
-func MakeIdentity(
-	nick string,
-	pubkey [PublicKeySize]byte,
-	privkey [PrivateKeySize]byte,
-	db *leveldb.DB,
-) error {
-	k := makeLevelKey("identity", nick)
-	if db.Get(k) != nil {
-		return errors.New("an identity with that nickname already exists")
+	conditions := []*buf.UpdateTx_Condition{&buf.UpdateTx_Condition{
+		PresetCondition: *proto.Uint32(1),
+		Data:            *proto.String("key: crunk"),
+	}}
+	test := &buf.UpdateTx{
+		ChannelID:      *proto.String("shibby"),
+		NetTransfer:    *proto.Int64(-34),
+		SequenceNumber: *proto.Uint32(12),
+		Fast:           *proto.Bool(true),
+		Conditions:     conditions,
 	}
-
-	id := Identity{
-		Nickname: nick,
-		Pubkey:   *pubkey,
-		Privkey:  *privkey,
-	}
-
-	jid, err := json.Marshal(&id)
+	data, err := proto.Marshal(test)
 	if err != nil {
-		return err
+		log.Fatal("marshaling error: ", err)
 	}
-
-	db.Set(k, jid)
-
-	return nil
-}
-
-func AddPeer(nick string, pubkey [PublicKeySize]byte, db *leveldb.DB) error {
-	k := makeLevelKey("peer", nick)
-	if db.Get(k) != nil {
-		return errors.New("a peer with that nickname already exists")
-	}
-
-	peer := Peer{
-		Nickname: nick,
-		Pubkey:   pubkey,
-	}
-
-	jpeer, err := json.Marshal(&peer)
+	newTest := &buf.UpdateTx{}
+	err = proto.Unmarshal(data, newTest)
 	if err != nil {
-		return err
+		log.Fatal("unmarshaling error: ", err)
 	}
-
-	db.Set(k, jpeer)
-
-	return nil
+	fmt.Println(test, data, newTest)
+	// Now test and newTest contain the same data.
+	// if test.GetLabel() != newTest.GetLabel() {
+	// 	log.Fatalf("data mismatch %q != %q", test.GetLabel(), newTest.GetLabel())
+	// }
+	// etc.
 }
 
-func ProposeOpeningTx(ot OpeningTx, privkey1 Privkey) []byte {
-	// Write opening tx into buffer
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, ot)
+// // func main() {
+// // 	db := leveldb.NewDB()
+// // 	MakeIdentity("faulkner", db)
+// // 	db.Print()
+// // }
 
-	// Sign payload
-	ot.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:OpeningTxPayloadSize])
+// func makeLevelKey(indexes ...string) []byte {
+// 	return []byte(strings.Join(indexes, ":"))
+// }
 
-	// Clear buffer and write signed opening tx back in
-	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, ot)
+// func MakeKeypair() ([PublicKeySize]byte, [PrivateKeySize]byte, error) {
+// 	return ed25519.GenerateKey(rand.Reader)
+// }
 
-	// Trim off empty signature to send
-	return buf.Bytes()[:OpeningTxPayloadSize+SignatureSize]
-}
-
-func DeserializeOpeningTx(b []byte) (OpeningTx, error) {
-	var ot OpeningTx
-	err := binary.Read(b, binary.LittleEndian, ot)
-	if err != nil {
-		return err
-	}
-
-	if ot.Signature1 == [SignatureSize]byte{byte(0)} {
-		ot.Signature1 = nil
-	}
-
-	if ot.Signature2 == [SignatureSize]byte{byte(0)} {
-		ot.Signature2 = nil
-	}
-
-	if ot.Signature1 &&
-		!ed25519.Verify(ot.Pubkey1, b[:OpeningTxPayloadSize], ot.Signature1) {
-		return errors.New("signature 1 is invalid")
-	}
-
-	if ot.Signature2 &&
-		!ed25519.Verify(ot.Pubkey2, b[:OpeningTxPayloadSize], ot.Signature2) {
-		return errors.New("signature 2 is invalid")
-	}
-
-	return ot
-}
-
-func ConfirmOpeningTx(b []byte, ot OpeningTx, privkey2 Privkey) error {
-	// Write opening tx into buffer
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, ot)
-
-	// Ensure equality with the sent byte slice
-	if buf.Bytes() != b {
-		return errors.New("")
-	}
-}
-
-// func tryingOutBinary() {
-// 	pubkey1, privkey1, _ := ed25519.GenerateKey(rand.Reader)
-// 	pubkey2, _, _ := ed25519.GenerateKey(rand.Reader)
-
-// 	op := OpeningTxProposal{
-// 		Pubkey1: *pubkey1,
-// 		Pubkey2: *pubkey2,
-// 		Amount1: 21,
-// 		Amount2: 12,
+// func MakeIdentity(
+// 	nick string,
+// 	pubkey [PublicKeySize]byte,
+// 	privkey [PrivateKeySize]byte,
+// 	db *leveldb.DB,
+// ) error {
+// 	k := makeLevelKey("identity", nick)
+// 	if db.Get(k) != nil {
+// 		return errors.New("an identity with that nickname already exists")
 // 	}
 
-// 	buf := new(bytes.Buffer)
+// 	id := Identity{
+// 		Nickname: nick,
+// 		Pubkey:   *pubkey,
+// 		Privkey:  *privkey,
+// 	}
 
-// 	binary.Write(buf, binary.LittleEndian, op)
-// 	fmt.Println(buf)
+// 	jid, err := json.Marshal(&id)
+// 	if err != nil {
+// 		return err
+// 	}
 
-// 	op.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:80])
+// 	db.Set(k, jid)
 
-// 	buf.Reset()
-// 	binary.Write(buf, binary.LittleEndian, op)
-// 	fmt.Println(buf)
+// 	return nil
 // }
-//
+
+// func AddPeer(nick string, pubkey [PublicKeySize]byte, db *leveldb.DB) error {
+// 	k := makeLevelKey("peer", nick)
+// 	if db.Get(k) != nil {
+// 		return errors.New("a peer with that nickname already exists")
+// 	}
+
+// 	peer := Peer{
+// 		Nickname: nick,
+// 		Pubkey:   pubkey,
+// 	}
+
+// 	jpeer, err := json.Marshal(&peer)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	db.Set(k, jpeer)
+
+// 	return nil
+// }
+
+// func ProposeUpdateTx(ut UpdateTx, privkey1 Privkey) []byte {
+// 	// Write into buffer
+// 	buf := new(bytes.Buffer)
+// 	binary.Write(buf, binary.LittleEndian, ut)
+
+// 	// Sign payload
+// 	ot.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:OpeningTxPayloadSize])
+
+// 	// Clear buffer and write signed opening tx back in
+// 	buf.Reset()
+// 	binary.Write(buf, binary.LittleEndian, ot)
+
+// 	// Trim off empty signature to send
+// 	return buf.Bytes()[:OpeningTxPayloadSize+SignatureSize]
+// }
+
+// func ConfirmUpdateTx(ut UpdateTx, privkey1 Privkey) []byte {
+// 	// Write into buffer
+// 	buf := new(bytes.Buffer)
+// 	binary.Write(buf, binary.LittleEndian, ut)
+
+// 	// Sign payload
+// 	ut.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:UpdateTxPayloadSize])
+
+// 	// Clear buffer and write signed opening tx back in
+// 	buf.Reset()
+// 	binary.Write(buf, binary.LittleEndian, ut)
+
+// 	// Trim off empty signature to send
+// 	return buf.Bytes()[:UpdateTxPayloadSize+SignatureSize]
+// }
+
+// func ProposeOpeningTx(ot OpeningTx, privkey1 Privkey) []byte {
+// 	// Write opening tx into buffer
+// 	buf := new(bytes.Buffer)
+// 	binary.Write(buf, binary.LittleEndian, ot)
+
+// 	// Sign payload
+// 	ot.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:OpeningTxPayloadSize])
+
+// 	// Clear buffer and write signed opening tx back in
+// 	buf.Reset()
+// 	binary.Write(buf, binary.LittleEndian, ot)
+
+// 	// Trim off empty signature to send
+// 	return buf.Bytes()[:OpeningTxPayloadSize+SignatureSize]
+// }
+
+// func DeserializeOpeningTx(b []byte) (OpeningTx, error) {
+// 	var ot OpeningTx
+// 	err := binary.Read(b, binary.LittleEndian, ot)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	if ot.Signature1 == [SignatureSize]byte{byte(0)} {
+// 		ot.Signature1 = nil
+// 	}
+
+// 	if ot.Signature2 == [SignatureSize]byte{byte(0)} {
+// 		ot.Signature2 = nil
+// 	}
+
+// 	if ot.Signature1 &&
+// 		!ed25519.Verify(ot.Pubkey1, b[:OpeningTxPayloadSize], ot.Signature1) {
+// 		return errors.New("signature 1 is invalid")
+// 	}
+
+// 	if ot.Signature2 &&
+// 		!ed25519.Verify(ot.Pubkey2, b[:OpeningTxPayloadSize], ot.Signature2) {
+// 		return errors.New("signature 2 is invalid")
+// 	}
+
+// 	return ot
+// }
+
+// func ConfirmOpeningTx(b []byte, ot OpeningTx, privkey2 Privkey) error {
+// 	// Write opening tx into buffer
+// 	buf := new(bytes.Buffer)
+// 	binary.Write(buf, binary.LittleEndian, ot)
+
+// 	// Ensure equality with the sent byte slice
+// 	if buf.Bytes() != b {
+// 		return errors.New("")
+// 	}
+// }
+
+// // func tryingOutBinary() {
+// // 	pubkey1, privkey1, _ := ed25519.GenerateKey(rand.Reader)
+// // 	pubkey2, _, _ := ed25519.GenerateKey(rand.Reader)
+
+// // 	op := OpeningTxProposal{
+// // 		Pubkey1: *pubkey1,
+// // 		Pubkey2: *pubkey2,
+// // 		Amount1: 21,
+// // 		Amount2: 12,
+// // 	}
+
+// // 	buf := new(bytes.Buffer)
+
+// // 	binary.Write(buf, binary.LittleEndian, op)
+// // 	fmt.Println(buf)
+
+// // 	op.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:80])
+
+// // 	buf.Reset()
+// // 	binary.Write(buf, binary.LittleEndian, op)
+// // 	fmt.Println(buf)
+// // }
+// //

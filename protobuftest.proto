@@ -1,0 +1,31 @@
+syntax = "proto3";
+package buf;
+
+message OpeningTx {
+  string channelID = 1;
+  bytes pubkey1 = 2;
+  bytes pubkey2 = 3;
+  uint32 amount1 = 4;
+  uint32 amount2 = 5;
+  uint32 holdPeriod = 6;
+}
+
+message UpdateTx {
+  string channelID = 1;
+  sint64 netTransfer = 2;
+  uint32 sequenceNumber = 3;
+  bool fast = 4;
+
+  message Condition {
+    uint32 presetCondition = 1;
+    string data = 2;
+  }
+
+  repeated Condition conditions = 5;
+}
+
+message Fulfillment {
+  string channelID = 1;
+  uint32 condition = 2;
+  string data = 3;
+}
