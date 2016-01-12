@@ -29,3 +29,16 @@ message Fulfillment {
   uint32 condition = 2;
   string data = 3;
 }
+
+message Envelope {
+  enum Type {
+    OpeningTx = 0;
+    UpdateTx = 1;
+    Fulfillment = 2;
+  }
+
+  Type type = 1;
+  bytes signature1 = 2;
+  bytes signature2 = 3;
+  bytes payload = 4;
+}

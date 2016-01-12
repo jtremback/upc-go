@@ -99,16 +99,36 @@ func main() {
 		Fast:           *proto.Bool(true),
 		Conditions:     conditions,
 	}
+
 	data, err := proto.Marshal(test)
 	if err != nil {
 		log.Fatal("marshaling error: ", err)
 	}
-	newTest := &buf.UpdateTx{}
+
+	wrapped := &buf.Envelope{
+		Type:       buf.Envelope_UpdateTx,
+		Signature1: []byte{0},
+		Payload:    data,
+	}
+
+	data, err = proto.Marshal(wrapped)
+	if err != nil {
+		log.Fatal("marshaling error: ", err)
+	}
+
+	newTest := &buf.Envelope{}
 	err = proto.Unmarshal(data, newTest)
 	if err != nil {
 		log.Fatal("unmarshaling error: ", err)
 	}
-	fmt.Println(test, data, newTest)
+
+	newerTest := &buf.UpdateTx{}
+	err = proto.Unmarshal(newTest.Payload, newerTest)
+	if err != nil {
+		log.Fatal("unmarshaling error: ", err)
+	}
+
+	fmt.Println(newerTest)
 	// Now test and newTest contain the same data.
 	// if test.GetLabel() != newTest.GetLabel() {
 	// 	log.Fatalf("data mismatch %q != %q", test.GetLabel(), newTest.GetLabel())
