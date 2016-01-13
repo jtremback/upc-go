@@ -24,17 +24,17 @@ package main
 // Bank checks both signatures
 
 import (
-	// "bytes"
-	// "crypto/rand"
-	// "strings"
+	"bytes"
+	"crypto/rand"
+	"strings"
 	// "encoding/binary"
 	// "encoding/json"
-	// "errors"
+	"errors"
 	"fmt"
 	"github.com/agl/ed25519"
 	"github.com/golang/protobuf/proto"
 	"github.com/jtremback/upc/buf"
-	// "github.com/jtremback/upc/memdb"
+	"github.com/jtremback/upc/memdb"
 	"log"
 )
 
@@ -47,52 +47,12 @@ const (
 	ChannelIDSize        = 32
 )
 
-type OpeningTx struct {
-	ChannelID  [ChannelIDSize]byte
-	Pubkey1    [PublicKeySize]byte
-	Pubkey2    [PublicKeySize]byte
-	Amount1    uint32
-	Amount2    uint32
-	HoldPeriod uint64
-	Signature1 [SignatureSize]byte
-	Signature2 [SignatureSize]byte
-}
-
-type UpdateTx struct {
-	ChannelID      [ChannelIDSize]byte
-	NetTransfer    int64
-	SequenceNumber uint32
-	Fast           bool
-	Conditions     []byte
-	Signature1     [SignatureSize]byte
-	Signature2     [SignatureSize]byte
-}
-
-type Channel struct {
-	ChannelID [ChannelIDSize]byte
-	OpeningTx
-	UpdateTxs []UpdateTx
-}
-
-type Identity struct {
-	Nickname string
-	Pubkey   [PublicKeySize]byte
-	Privkey  [PrivateKeySize]byte
-	Channels [][ChannelIDSize]byte
-}
-
-type Peer struct {
-	Nickname string
-	Pubkey   [PublicKeySize]byte
-	Channels [][ChannelIDSize]byte
-}
-
 func main() {
-	conditions := []*buf.UpdateTx_Condition{&buf.UpdateTx_Condition{
+	conditions := []*pb.UpdateTx_Condition{&pb.UpdateTx_Condition{
 		PresetCondition: *proto.Uint32(1),
 		Data:            *proto.String("key: crunk"),
 	}}
-	test := &buf.UpdateTx{
+	test := pb.UpdateTx{
 		ChannelID:      *proto.String("shibby"),
 		NetTransfer:    *proto.Int64(-34),
 		SequenceNumber: *proto.Uint32(12),
@@ -100,29 +60,29 @@ func main() {
 		Conditions:     conditions,
 	}
 
-	data, err := proto.Marshal(test)
+	data, err := proto.Marshal(&test)
 	if err != nil {
 		log.Fatal("marshaling error: ", err)
 	}
 
-	wrapped := &buf.Envelope{
-		Type:       buf.Envelope_UpdateTx,
+	wrapped := pb.Envelope{
+		Type:       pb.Envelope_UpdateTx,
 		Signature1: []byte{0},
 		Payload:    data,
 	}
 
-	data, err = proto.Marshal(wrapped)
+	data, err = proto.Marshal(&wrapped)
 	if err != nil {
 		log.Fatal("marshaling error: ", err)
 	}
 
-	newTest := &buf.Envelope{}
+	newTest := &pb.Envelope{}
 	err = proto.Unmarshal(data, newTest)
 	if err != nil {
 		log.Fatal("unmarshaling error: ", err)
 	}
 
-	newerTest := &buf.UpdateTx{}
+	newerTest := &pb.UpdateTx{}
 	err = proto.Unmarshal(newTest.Payload, newerTest)
 	if err != nil {
 		log.Fatal("unmarshaling error: ", err)
@@ -136,19 +96,140 @@ func main() {
 	// etc.
 }
 
+func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) (*pb.UpdateTx, error) {
+	ident := pb.Identity{}
+	err := proto.Unmarshal(db.Get(makeLevelKey("identity", nick)), &ident)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := pb.Channel{}
+	err = proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
+	if err != nil {
+		return nil, err
+	}
+
+	up := ch.UpdateTxs[0]
+
+	// Sum up all the possible conditional transfer amounts and add to net transfer
+	nt := up.NetTransfer
+	for _, v := range up.Conditions {
+		nt += v.ConditionalTransfer
+	}
+
+	// Check if we are pubkey1 or pubkey2 and add or subtract amt from net transfer
+	if bytes.Compare(ident.Pubkey, ch.OpeningTx.Pubkey1) == 0 {
+		nt += int64(amt)
+	} else if bytes.Compare(ident.Pubkey, ch.OpeningTx.Pubkey2) == 0 {
+		nt -= int64(amt)
+	} else {
+		return nil, errors.New("this channel does not belong to this identity")
+	}
+
+	// Check if the net transfer amount is still valid
+	if nt > int64(ch.OpeningTx.Amount1) || nt < int64(ch.OpeningTx.Amount2) {
+		return nil, errors.New("invalid amt")
+	}
+
+	utx := pb.UpdateTx{
+		ChannelID:      chID,
+		NetTransfer:    nt,
+		SequenceNumber: up.SequenceNumber + 1,
+		Fast:           false,
+	}
+
+	return &utx, nil
+}
+
+// // Look up corresponding channel in db
+// // Verify sig using pubkey from db
+// func VerifyUpdateTxProposal(ev pb.Envelope, db leveldb.DB) (pb.UpdateTx, err) {
+// 	tx := pb.UpdateTx{}
+// 	err = proto.Unmarshal(ev.Payload, &tx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	ch := pb.Channel{}
+// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
+// 		return errors.New("signature is invalid")
+// 	}
+
+// 	return tx, nil
+// }
+
+// // Look up corresponding channel in db
+// // Verify sig using pubkey from db
+// func VerifyUpdateTx(ev pb.Envelope, db leveldb.DB) (pb.UpdateTx, err) {
+// 	tx := pb.UpdateTx{}
+// 	err = proto.Unmarshal(ev.Payload, &tx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	ch := pb.Channel{}
+// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
+// 		return errors.New("signature 1 is invalid")
+// 	}
+
+// 	if !ed25519.Verify(ch.Pubkey2, ev.Payload, ev.Signature2) {
+// 		return errors.New("signature 2 is invalid")
+// 	}
+
+// 	return tx, nil
+// }
+
+// func VerifyOpeningTx(ev, db) {
+// 	tx := pb.UpdateTx{}
+// 	err = proto.Unmarshal(ev.Payload, &tx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	ch := pb.Channel{}
+// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
+// 		return errors.New("signature 1 is invalid")
+// 	}
+
+// 	if !ed25519.Verify(ch.Pubkey2, ev.Payload, ev.Signature2) {
+// 		return errors.New("signature 2 is invalid")
+// 	}
+
+// 	return tx, nil
+// }
+
+// func VerifyOpeningTxProposal(ev, db) {
+
+// }
+
 // // func main() {
 // // 	db := leveldb.NewDB()
 // // 	MakeIdentity("faulkner", db)
 // // 	db.Print()
 // // }
 
-// func makeLevelKey(indexes ...string) []byte {
-// 	return []byte(strings.Join(indexes, ":"))
-// }
+func makeLevelKey(indexes ...string) []byte {
+	return []byte(strings.Join(indexes, ":"))
+}
 
-// func MakeKeypair() ([PublicKeySize]byte, [PrivateKeySize]byte, error) {
-// 	return ed25519.GenerateKey(rand.Reader)
-// }
+func MakeKeypair() (*[PublicKeySize]byte, *[PrivateKeySize]byte, error) {
+	return ed25519.GenerateKey(rand.Reader)
+}
 
 // func MakeIdentity(
 // 	nick string,
@@ -197,114 +278,3 @@ func main() {
 
 // 	return nil
 // }
-
-// func ProposeUpdateTx(ut UpdateTx, privkey1 Privkey) []byte {
-// 	// Write into buffer
-// 	buf := new(bytes.Buffer)
-// 	binary.Write(buf, binary.LittleEndian, ut)
-
-// 	// Sign payload
-// 	ot.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:OpeningTxPayloadSize])
-
-// 	// Clear buffer and write signed opening tx back in
-// 	buf.Reset()
-// 	binary.Write(buf, binary.LittleEndian, ot)
-
-// 	// Trim off empty signature to send
-// 	return buf.Bytes()[:OpeningTxPayloadSize+SignatureSize]
-// }
-
-// func ConfirmUpdateTx(ut UpdateTx, privkey1 Privkey) []byte {
-// 	// Write into buffer
-// 	buf := new(bytes.Buffer)
-// 	binary.Write(buf, binary.LittleEndian, ut)
-
-// 	// Sign payload
-// 	ut.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:UpdateTxPayloadSize])
-
-// 	// Clear buffer and write signed opening tx back in
-// 	buf.Reset()
-// 	binary.Write(buf, binary.LittleEndian, ut)
-
-// 	// Trim off empty signature to send
-// 	return buf.Bytes()[:UpdateTxPayloadSize+SignatureSize]
-// }
-
-// func ProposeOpeningTx(ot OpeningTx, privkey1 Privkey) []byte {
-// 	// Write opening tx into buffer
-// 	buf := new(bytes.Buffer)
-// 	binary.Write(buf, binary.LittleEndian, ot)
-
-// 	// Sign payload
-// 	ot.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:OpeningTxPayloadSize])
-
-// 	// Clear buffer and write signed opening tx back in
-// 	buf.Reset()
-// 	binary.Write(buf, binary.LittleEndian, ot)
-
-// 	// Trim off empty signature to send
-// 	return buf.Bytes()[:OpeningTxPayloadSize+SignatureSize]
-// }
-
-// func DeserializeOpeningTx(b []byte) (OpeningTx, error) {
-// 	var ot OpeningTx
-// 	err := binary.Read(b, binary.LittleEndian, ot)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	if ot.Signature1 == [SignatureSize]byte{byte(0)} {
-// 		ot.Signature1 = nil
-// 	}
-
-// 	if ot.Signature2 == [SignatureSize]byte{byte(0)} {
-// 		ot.Signature2 = nil
-// 	}
-
-// 	if ot.Signature1 &&
-// 		!ed25519.Verify(ot.Pubkey1, b[:OpeningTxPayloadSize], ot.Signature1) {
-// 		return errors.New("signature 1 is invalid")
-// 	}
-
-// 	if ot.Signature2 &&
-// 		!ed25519.Verify(ot.Pubkey2, b[:OpeningTxPayloadSize], ot.Signature2) {
-// 		return errors.New("signature 2 is invalid")
-// 	}
-
-// 	return ot
-// }
-
-// func ConfirmOpeningTx(b []byte, ot OpeningTx, privkey2 Privkey) error {
-// 	// Write opening tx into buffer
-// 	buf := new(bytes.Buffer)
-// 	binary.Write(buf, binary.LittleEndian, ot)
-
-// 	// Ensure equality with the sent byte slice
-// 	if buf.Bytes() != b {
-// 		return errors.New("")
-// 	}
-// }
-
-// // func tryingOutBinary() {
-// // 	pubkey1, privkey1, _ := ed25519.GenerateKey(rand.Reader)
-// // 	pubkey2, _, _ := ed25519.GenerateKey(rand.Reader)
-
-// // 	op := OpeningTxProposal{
-// // 		Pubkey1: *pubkey1,
-// // 		Pubkey2: *pubkey2,
-// // 		Amount1: 21,
-// // 		Amount2: 12,
-// // 	}
-
-// // 	buf := new(bytes.Buffer)
-
-// // 	binary.Write(buf, binary.LittleEndian, op)
-// // 	fmt.Println(buf)
-
-// // 	op.Signature1 = *ed25519.Sign(privkey1, buf.Bytes()[:80])
-
-// // 	buf.Reset()
-// // 	binary.Write(buf, binary.LittleEndian, op)
-// // 	fmt.Println(buf)
-// // }
-// //

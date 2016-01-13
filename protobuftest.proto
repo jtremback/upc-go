@@ -1,5 +1,5 @@
 syntax = "proto3";
-package buf;
+package pb;
 
 message OpeningTx {
   string channelID = 1;
@@ -18,7 +18,8 @@ message UpdateTx {
 
   message Condition {
     uint32 presetCondition = 1;
-    string data = 2;
+    int64 conditionalTransfer = 2;
+    string data = 3;
   }
 
   repeated Condition conditions = 5;
@@ -33,12 +34,33 @@ message Fulfillment {
 message Envelope {
   enum Type {
     OpeningTx = 0;
-    UpdateTx = 1;
-    Fulfillment = 2;
+    OpeningTxProposal = 1;
+    UpdateTx = 2;
+    UpdateTxProposal = 3;
+    Fulfillment = 4;
   }
 
   Type type = 1;
-  bytes signature1 = 2;
-  bytes signature2 = 3;
-  bytes payload = 4;
+  bytes payload = 2;
+  bytes signature1 = 3;
+  bytes signature2 = 4;
+}
+
+message Channel {
+  string channelID = 1;
+  OpeningTx openingTx = 2;
+  repeated UpdateTx updateTxs = 3;
+}
+
+message Identity {
+  string nickname = 1;
+  bytes pubkey = 2;
+  bytes privkey = 3;
+  repeated string channels = 4;
+}
+
+message Peer {
+  string nickname = 1;
+  bytes pubkey = 2;
+  repeated string channels = 3;
 }
