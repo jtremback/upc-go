@@ -49,7 +49,9 @@ message Envelope {
 message Channel {
   string channelID = 1;
   OpeningTx openingTx = 2;
-  repeated UpdateTx updateTxs = 3;
+  UpdateTx lastUpdateTx = 3;
+  UpdateTx lastFullUpdateTx = 4;
+  uint32 me = 5;
 }
 
 message Identity {

@@ -96,7 +96,21 @@ func main() {
 	// etc.
 }
 
-func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) (*pb.UpdateTx, error) {
+// func MakeIdentity(nick string) error {
+
+// }
+
+func getConditionalTransfer(lst pb.UpdateTx) int64 {
+	// Sum up all conditional transfer amounts and add to net transfer
+	var ct int64
+	for _, v := range lst.Conditions {
+		ct += v.ConditionalTransfer
+	}
+
+	return ct
+}
+
+func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) ([]byte, error) {
 	ident := pb.Identity{}
 	err := proto.Unmarshal(db.Get(makeLevelKey("identity", nick)), &ident)
 	if err != nil {
@@ -109,119 +123,104 @@ func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) (
 		return nil, err
 	}
 
-	up := ch.UpdateTxs[0]
-
-	// Sum up all the possible conditional transfer amounts and add to net transfer
-	nt := up.NetTransfer
-	for _, v := range up.Conditions {
-		nt += v.ConditionalTransfer
-	}
+	lst := ch.LastUpdateTx
+	nt := lst.NetTransfer
 
 	// Check if we are pubkey1 or pubkey2 and add or subtract amt from net transfer
-	if bytes.Compare(ident.Pubkey, ch.OpeningTx.Pubkey1) == 0 {
+	switch ch.Me {
+	case 1:
 		nt += int64(amt)
-	} else if bytes.Compare(ident.Pubkey, ch.OpeningTx.Pubkey2) == 0 {
+	case 2:
 		nt -= int64(amt)
-	} else {
-		return nil, errors.New("this channel does not belong to this identity")
 	}
 
+	ct := getConditionalTransfer(lst)
+
 	// Check if the net transfer amount is still valid
-	if nt > int64(ch.OpeningTx.Amount1) || nt < int64(ch.OpeningTx.Amount2) {
+	if ct+nt > int64(ch.OpeningTx.Amount1) || ct+nt < int64(ch.OpeningTx.Amount2) {
 		return nil, errors.New("invalid amt")
 	}
 
+	// Make new update transaction
 	utx := pb.UpdateTx{
 		ChannelID:      chID,
 		NetTransfer:    nt,
-		SequenceNumber: up.SequenceNumber + 1,
+		SequenceNumber: lst.SequenceNumber + 1,
 		Fast:           false,
 	}
 
-	return &utx, nil
+	// Serialize update transaction
+	data, err := proto.Marshal(&utx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sign update transaction
+	sig := ed25519.Sign(privateKey, message)
+
+	// Make new envelope
+	ev := pb.Envelope{
+		Type:    pb.Envelope_UpdateTxProposal,
+		Payload: data,
+	}
+
+	// Put signature in correct slot
+	switch ch.Me {
+	case 1:
+		ev.Signature1 = sig
+	case 2:
+		ev.Signature2 = sig
+	}
+
+	// Serialize envelope
+	data, err = proto.Marshal(&ev)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
 
-// // Look up corresponding channel in db
-// // Verify sig using pubkey from db
-// func VerifyUpdateTxProposal(ev pb.Envelope, db leveldb.DB) (pb.UpdateTx, err) {
-// 	tx := pb.UpdateTx{}
-// 	err = proto.Unmarshal(ev.Payload, &tx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+func ReceiveUpdateTxProposal(ev pb.Envelope) (uint32, error) {
+	ch := pb.Channel{}
+	err = proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
+	if err != nil {
+		return nil, err
+	}
 
-// 	ch := pb.Channel{}
-// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	// Read signature from correct slot
+	switch ch.Me {
+	case 1:
+		sig := ev.Signature2
+		pubkey := ch.OpeningTx.Pubkey2
+	case 2:
+		sig := ev.Signature1
+		pubkey := ch.OpeningTx.Pubkey2
+	}
 
-// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
-// 		return errors.New("signature is invalid")
-// 	}
+	// Check signature
+	if !ed25519.Verify(pubkey, ev.Payload, sig) {
+		return nil, errors.New("invalid signature")
+	}
 
-// 	return tx, nil
-// }
+	utx := pb.UpdateTx{}
+	err = proto.Unmarshal(ev.Payload, &utx)
+	if err != nil {
+		return nil, err
+	}
 
-// // Look up corresponding channel in db
-// // Verify sig using pubkey from db
-// func VerifyUpdateTx(ev pb.Envelope, db leveldb.DB) (pb.UpdateTx, err) {
-// 	tx := pb.UpdateTx{}
-// 	err = proto.Unmarshal(ev.Payload, &tx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	lst := ch.LastUpdateTx
+	nt := lst.NetTransfer
 
-// 	ch := pb.Channel{}
-// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	switch ch.Me {
+	case 1:
+		amt := utx.NetTransfer - lst.NetTransfer
+	case 2:
+		amt := lst.NetTransfer - utx.NetTransfer
+	}
 
-// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
-// 		return errors.New("signature 1 is invalid")
-// 	}
-
-// 	if !ed25519.Verify(ch.Pubkey2, ev.Payload, ev.Signature2) {
-// 		return errors.New("signature 2 is invalid")
-// 	}
-
-// 	return tx, nil
-// }
-
-// func VerifyOpeningTx(ev, db) {
-// 	tx := pb.UpdateTx{}
-// 	err = proto.Unmarshal(ev.Payload, &tx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	ch := pb.Channel{}
-// 	err = proto.Unmarshal(db.Get(tx.ChannelID), &ch)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	if !ed25519.Verify(ch.Pubkey1, ev.Payload, ev.Signature1) {
-// 		return errors.New("signature 1 is invalid")
-// 	}
-
-// 	if !ed25519.Verify(ch.Pubkey2, ev.Payload, ev.Signature2) {
-// 		return errors.New("signature 2 is invalid")
-// 	}
-
-// 	return tx, nil
-// }
-
-// func VerifyOpeningTxProposal(ev, db) {
-
-// }
-
-// // func main() {
-// // 	db := leveldb.NewDB()
-// // 	MakeIdentity("faulkner", db)
-// // 	db.Print()
-// // }
+	return amt, nil
+}
 
 func makeLevelKey(indexes ...string) []byte {
 	return []byte(strings.Join(indexes, ":"))
@@ -230,51 +229,3 @@ func makeLevelKey(indexes ...string) []byte {
 func MakeKeypair() (*[PublicKeySize]byte, *[PrivateKeySize]byte, error) {
 	return ed25519.GenerateKey(rand.Reader)
 }
-
-// func MakeIdentity(
-// 	nick string,
-// 	pubkey [PublicKeySize]byte,
-// 	privkey [PrivateKeySize]byte,
-// 	db *leveldb.DB,
-// ) error {
-// 	k := makeLevelKey("identity", nick)
-// 	if db.Get(k) != nil {
-// 		return errors.New("an identity with that nickname already exists")
-// 	}
-
-// 	id := Identity{
-// 		Nickname: nick,
-// 		Pubkey:   *pubkey,
-// 		Privkey:  *privkey,
-// 	}
-
-// 	jid, err := json.Marshal(&id)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	db.Set(k, jid)
-
-// 	return nil
-// }
-
-// func AddPeer(nick string, pubkey [PublicKeySize]byte, db *leveldb.DB) error {
-// 	k := makeLevelKey("peer", nick)
-// 	if db.Get(k) != nil {
-// 		return errors.New("a peer with that nickname already exists")
-// 	}
-
-// 	peer := Peer{
-// 		Nickname: nick,
-// 		Pubkey:   pubkey,
-// 	}
-
-// 	jpeer, err := json.Marshal(&peer)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	db.Set(k, jpeer)
-
-// 	return nil
-// }
