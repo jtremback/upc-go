@@ -155,7 +155,7 @@ func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) 
 		Type:    pb.Envelope_UpdateTxProposal,
 		Payload: data,
 	}
-
+	// fmt.Println(ed25519.GenerateKey(rand.Reader))
 	// Put signature in correct slot
 	switch ch.Me {
 	case 1:
@@ -181,7 +181,7 @@ func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) 
 // 	return nil, err
 // }
 
-func VerifyUpdateTxProposal(ev pb.Envelope, ch pb.Channel) (uint32, error) {
+func VerifyUpdateTxProposal(ev *pb.Envelope, ch *pb.Channel) (uint32, error) {
 	var pubkey [32]byte
 	var sig [64]byte
 
@@ -189,11 +189,11 @@ func VerifyUpdateTxProposal(ev pb.Envelope, ch pb.Channel) (uint32, error) {
 	// Copy signature and pubkey
 	switch ch.Me {
 	case 1:
-		copy(sig[:], ev.Signature2)
-		copy(pubkey[:], ch.OpeningTx.Pubkey2)
+		pubkey = *sliceTo32Byte(ch.OpeningTx.Pubkey2)
+		sig = *sliceTo64Byte(ev.Signature2)
 	case 2:
-		copy(sig[:], ev.Signature1)
-		copy(pubkey[:], ch.OpeningTx.Pubkey1)
+		pubkey = *sliceTo32Byte(ch.OpeningTx.Pubkey1)
+		sig = *sliceTo64Byte(ev.Signature1)
 	}
 
 	// Check signature

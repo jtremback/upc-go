@@ -15,9 +15,18 @@ var ident = &pb.Identity{
 	Channels: []string{"shibby"},
 }
 
+var ident2 = &pb.Identity{
+	Nickname: "billary",
+	Pubkey:   []byte{166, 179, 85, 111, 208, 182, 235, 76, 4, 45, 157, 209, 98, 106, 201, 245, 59, 25, 255, 99, 66, 25, 135, 20, 5, 86, 82, 72, 97, 212, 177, 132},
+	Privkey:  []byte{184, 174, 56, 197, 104, 10, 100, 13, 194, 229, 111, 227, 49, 49, 126, 232, 117, 100, 207, 170, 154, 36, 118, 153, 143, 150, 182, 228, 98, 161, 144, 112, 166, 179, 85, 111, 208, 182, 235, 76, 4, 45, 157, 209, 98, 106, 201, 245, 59, 25, 255, 99, 66, 25, 135, 20, 5, 86, 82, 72, 97, 212, 177, 132},
+	Channels: []string{"shibby"},
+}
+
 var ch = &pb.Channel{
 	ChannelID: "shibby",
 	OpeningTx: &pb.OpeningTx{
+		Pubkey1: ident.Pubkey,
+		Pubkey2: ident2.Pubkey,
 		Amount1: 100,
 		Amount2: 100,
 	},
@@ -27,6 +36,22 @@ var ch = &pb.Channel{
 		SequenceNumber: 1,
 	},
 	Me: 1,
+}
+
+var ch2 = &pb.Channel{
+	ChannelID: "shibby",
+	OpeningTx: &pb.OpeningTx{
+		Pubkey1: ident.Pubkey,
+		Pubkey2: ident2.Pubkey,
+		Amount1: 100,
+		Amount2: 100,
+	},
+	LastUpdateTx: &pb.UpdateTx{
+		ChannelID:      "shibby",
+		NetTransfer:    -24,
+		SequenceNumber: 1,
+	},
+	Me: 2,
 }
 
 func TestMakeUpdateTxProposal(t *testing.T) {
@@ -60,6 +85,27 @@ func TestSignUpdateTxProposal(t *testing.T) {
 	if !ed25519.Verify(sliceTo32Byte(ident.Pubkey), ev.Payload, sliceTo64Byte(ev.Signature1)) {
 		t.Error("invalid signature")
 	}
+}
 
-	fmt.Println(ev)
+func TestVerifyUpdateTxProposal(t *testing.T) {
+	utx, err := MakeUpdateTxProposal(12, ch2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	ev, err := SignUpdateTxProposal(utx, ident2, ch2)
+	if err != nil {
+		t.Error(err)
+	}
+
+	amt, err := VerifyUpdateTxProposal(ev, ch)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if amt != 12 {
+		t.Error("wrong amt:", amt)
+	}
+
+	fmt.Println(amt, err)
 }
