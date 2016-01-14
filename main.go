@@ -24,17 +24,17 @@ package main
 // Bank checks both signatures
 
 import (
-	"bytes"
+	// "bytes"
 	"crypto/rand"
 	"strings"
 	// "encoding/binary"
 	// "encoding/json"
 	"errors"
-	"fmt"
+	// "fmt"
 	"github.com/agl/ed25519"
 	"github.com/golang/protobuf/proto"
-	"github.com/jtremback/upc/buf"
-	"github.com/jtremback/upc/memdb"
+	// "github.com/jtremback/upc/memdb"
+	"github.com/jtremback/upc/pb"
 	"log"
 )
 
@@ -48,7 +48,7 @@ const (
 )
 
 func main() {
-	conditions := []*pb.UpdateTx_Condition{&pb.UpdateTx_Condition{
+	conditions := []*pb.UpdateTx_Condition{{
 		PresetCondition: *proto.Uint32(1),
 		Data:            *proto.String("key: crunk"),
 	}}
@@ -87,20 +87,9 @@ func main() {
 	if err != nil {
 		log.Fatal("unmarshaling error: ", err)
 	}
-
-	fmt.Println(newerTest)
-	// Now test and newTest contain the same data.
-	// if test.GetLabel() != newTest.GetLabel() {
-	// 	log.Fatalf("data mismatch %q != %q", test.GetLabel(), newTest.GetLabel())
-	// }
-	// etc.
 }
 
-// func MakeIdentity(nick string) error {
-
-// }
-
-func getConditionalTransfer(lst pb.UpdateTx) int64 {
+func getConditionalTransfer(lst *pb.UpdateTx) int64 {
 	// Sum up all conditional transfer amounts and add to net transfer
 	var ct int64
 	for _, v := range lst.Conditions {
@@ -110,19 +99,7 @@ func getConditionalTransfer(lst pb.UpdateTx) int64 {
 	return ct
 }
 
-func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) ([]byte, error) {
-	ident := pb.Identity{}
-	err := proto.Unmarshal(db.Get(makeLevelKey("identity", nick)), &ident)
-	if err != nil {
-		return nil, err
-	}
-
-	ch := pb.Channel{}
-	err = proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
-	if err != nil {
-		return nil, err
-	}
-
+func MakeUpdateTxProposal(amt uint32, ch *pb.Channel) (*pb.UpdateTx, error) {
 	lst := ch.LastUpdateTx
 	nt := lst.NetTransfer
 
@@ -134,29 +111,44 @@ func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) (
 		nt -= int64(amt)
 	}
 
-	ct := getConditionalTransfer(lst)
+	// Add conditional transfer
+	nt += getConditionalTransfer(lst)
 
 	// Check if the net transfer amount is still valid
-	if ct+nt > int64(ch.OpeningTx.Amount1) || ct+nt < int64(ch.OpeningTx.Amount2) {
+	if nt > int64(ch.OpeningTx.Amount1) || nt < -int64(ch.OpeningTx.Amount2) {
 		return nil, errors.New("invalid amt")
 	}
 
 	// Make new update transaction
-	utx := pb.UpdateTx{
-		ChannelID:      chID,
+	return &pb.UpdateTx{
+		ChannelID:      ch.ChannelID,
 		NetTransfer:    nt,
 		SequenceNumber: lst.SequenceNumber + 1,
 		Fast:           false,
-	}
+	}, nil
+}
 
+func sliceTo64Byte(slice []byte) *[64]byte {
+	var array [64]byte
+	copy(array[:], slice[:64])
+	return &array
+}
+
+func sliceTo32Byte(slice []byte) *[32]byte {
+	var array [32]byte
+	copy(array[:], slice[:32])
+	return &array
+}
+
+func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) (*pb.Envelope, error) {
 	// Serialize update transaction
-	data, err := proto.Marshal(&utx)
+	data, err := proto.Marshal(utx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Sign update transaction
-	sig := ed25519.Sign(privateKey, message)
+	// Sign update transaction, convert signature to slice
+	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), data)
 
 	// Make new envelope
 	ev := pb.Envelope{
@@ -167,56 +159,68 @@ func MakeUpdateTxProposal(nick string, chID string, amt uint32, db leveldb.DB) (
 	// Put signature in correct slot
 	switch ch.Me {
 	case 1:
-		ev.Signature1 = sig
+		ev.Signature1 = sig[:]
 	case 2:
-		ev.Signature2 = sig
+		ev.Signature2 = sig[:]
 	}
 
-	// Serialize envelope
-	data, err = proto.Marshal(&ev)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return &ev, nil
 }
 
-func ReceiveUpdateTxProposal(ev pb.Envelope) (uint32, error) {
-	ch := pb.Channel{}
-	err = proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
-	if err != nil {
-		return nil, err
-	}
+// func MakeOpeningProposal(amt uint32, ident *pb.Identity, ch *pb.Channel) ()
+
+// // Serialize envelope
+// data, err = proto.Marshal(&ev)
+// if err != nil {
+// 	return nil, err
+// }
+
+// ch := pb.Channel{}
+// err := proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
+// if err != nil {
+// 	return nil, err
+// }
+
+func VerifyUpdateTxProposal(ev pb.Envelope, ch pb.Channel) (uint32, error) {
+	var pubkey [32]byte
+	var sig [64]byte
 
 	// Read signature from correct slot
+	// Copy signature and pubkey
 	switch ch.Me {
 	case 1:
-		sig := ev.Signature2
-		pubkey := ch.OpeningTx.Pubkey2
+		copy(sig[:], ev.Signature2)
+		copy(pubkey[:], ch.OpeningTx.Pubkey2)
 	case 2:
-		sig := ev.Signature1
-		pubkey := ch.OpeningTx.Pubkey2
+		copy(sig[:], ev.Signature1)
+		copy(pubkey[:], ch.OpeningTx.Pubkey1)
 	}
 
 	// Check signature
-	if !ed25519.Verify(pubkey, ev.Payload, sig) {
-		return nil, errors.New("invalid signature")
+	if !ed25519.Verify(&pubkey, ev.Payload, &sig) {
+		return 0, errors.New("invalid signature")
 	}
 
 	utx := pb.UpdateTx{}
-	err = proto.Unmarshal(ev.Payload, &utx)
+	err := proto.Unmarshal(ev.Payload, &utx)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	lst := ch.LastUpdateTx
-	nt := lst.NetTransfer
 
+	// Check last sequence number
+	if lst.SequenceNumber+1 != utx.SequenceNumber {
+		return 0, errors.New("invalid sequence number")
+	}
+
+	// Get amount depending on if we are party 1 or party 2
+	var amt uint32
 	switch ch.Me {
 	case 1:
-		amt := utx.NetTransfer - lst.NetTransfer
+		amt = uint32(lst.NetTransfer - utx.NetTransfer)
 	case 2:
-		amt := lst.NetTransfer - utx.NetTransfer
+		amt = uint32(utx.NetTransfer - lst.NetTransfer)
 	}
 
 	return amt, nil
