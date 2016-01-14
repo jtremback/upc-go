@@ -1,95 +1,21 @@
 package main
 
-// poc cli
-//
-// Generate and store own identities
-// Add and store peer identities
-// Open and store channels
-// Update channels
-// Receive update and store
-// Serve channel info
-// Check channel info
-
-// Alice makes opening transaction proposal
-// Bob verifies it with Alice's signature
-// Bob adds his signature, creates opening transaction
-// Bank verifies it with both signatures
-
-// Alice makes update transaction proposal
-// Bob verifies it with Alice's signature and criteria
-// He considers himself paid
-
-// Bob adds his signature to update transaction
-// Sends it to bank
-// Bank checks both signatures
-
 import (
 	// "bytes"
 	"crypto/rand"
-	"strings"
+	// "strings"
 	// "encoding/binary"
 	// "encoding/json"
 	"errors"
+	"io"
 	// "fmt"
 	"github.com/agl/ed25519"
 	"github.com/golang/protobuf/proto"
 	// "github.com/jtremback/upc/memdb"
-	"github.com/jtremback/upc/pb"
-	"log"
+	// "log"
 )
 
-const (
-	PublicKeySize        = ed25519.PublicKeySize
-	PrivateKeySize       = ed25519.PrivateKeySize
-	SignatureSize        = ed25519.SignatureSize
-	OpeningTxPayloadSize = 80
-	UpdateTxPayloadSize  = 1
-	ChannelIDSize        = 32
-)
-
-func main() {
-	conditions := []*pb.UpdateTx_Condition{{
-		PresetCondition: *proto.Uint32(1),
-		Data:            *proto.String("key: crunk"),
-	}}
-	test := pb.UpdateTx{
-		ChannelID:      *proto.String("shibby"),
-		NetTransfer:    *proto.Int64(-34),
-		SequenceNumber: *proto.Uint32(12),
-		Fast:           *proto.Bool(true),
-		Conditions:     conditions,
-	}
-
-	data, err := proto.Marshal(&test)
-	if err != nil {
-		log.Fatal("marshaling error: ", err)
-	}
-
-	wrapped := pb.Envelope{
-		Type:       pb.Envelope_UpdateTx,
-		Signature1: []byte{0},
-		Payload:    data,
-	}
-
-	data, err = proto.Marshal(&wrapped)
-	if err != nil {
-		log.Fatal("marshaling error: ", err)
-	}
-
-	newTest := &pb.Envelope{}
-	err = proto.Unmarshal(data, newTest)
-	if err != nil {
-		log.Fatal("unmarshaling error: ", err)
-	}
-
-	newerTest := &pb.UpdateTx{}
-	err = proto.Unmarshal(newTest.Payload, newerTest)
-	if err != nil {
-		log.Fatal("unmarshaling error: ", err)
-	}
-}
-
-func getConditionalTransfer(lst *pb.UpdateTx) int64 {
+func calcConditionalTransfer(lst *UpdateTx) int64 {
 	// Sum up all conditional transfer amounts and add to net transfer
 	var ct int64
 	for _, v := range lst.Conditions {
@@ -99,28 +25,29 @@ func getConditionalTransfer(lst *pb.UpdateTx) int64 {
 	return ct
 }
 
-func MakeUpdateTxProposal(amt uint32, ch *pb.Channel) (*pb.UpdateTx, error) {
+// NewUpdateTxProposal makes a new UpdateTx with NetTransfer changed to add amt
+func NewUpdateTxProposal(amount uint32, ch *Channel) (*UpdateTx, error) {
 	lst := ch.LastUpdateTx
 	nt := lst.NetTransfer
 
-	// Check if we are pubkey1 or pubkey2 and add or subtract amt from net transfer
+	// Check if we are pubkey1 or pubkey2 and add or subtract amount from net transfer
 	switch ch.Me {
 	case 1:
-		nt += int64(amt)
+		nt += int64(amount)
 	case 2:
-		nt -= int64(amt)
+		nt -= int64(amount)
 	}
 
 	// Add conditional transfer
-	nt += getConditionalTransfer(lst)
+	nt += calcConditionalTransfer(lst)
 
 	// Check if the net transfer amount is still valid
 	if nt > int64(ch.OpeningTx.Amount1) || nt < -int64(ch.OpeningTx.Amount2) {
-		return nil, errors.New("invalid amt")
+		return nil, errors.New("invalid amount")
 	}
 
 	// Make new update transaction
-	return &pb.UpdateTx{
+	return &UpdateTx{
 		ChannelID:      ch.ChannelID,
 		NetTransfer:    nt,
 		SequenceNumber: lst.SequenceNumber + 1,
@@ -140,7 +67,7 @@ func sliceTo32Byte(slice []byte) *[32]byte {
 	return &array
 }
 
-func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) (*pb.Envelope, error) {
+func SignUpdateTxProposal(utx *UpdateTx, ident *Identity, ch *Channel) (*Envelope, error) {
 	// Serialize update transaction
 	data, err := proto.Marshal(utx)
 	if err != nil {
@@ -151,11 +78,11 @@ func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) 
 	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), data)
 
 	// Make new envelope
-	ev := pb.Envelope{
-		Type:    pb.Envelope_UpdateTxProposal,
+	ev := Envelope{
+		Type:    Envelope_UpdateTxProposal,
 		Payload: data,
 	}
-	// fmt.Println(ed25519.GenerateKey(rand.Reader))
+
 	// Put signature in correct slot
 	switch ch.Me {
 	case 1:
@@ -167,21 +94,7 @@ func SignUpdateTxProposal(utx *pb.UpdateTx, ident *pb.Identity, ch *pb.Channel) 
 	return &ev, nil
 }
 
-// func MakeOpeningProposal(amt uint32, ident *pb.Identity, ch *pb.Channel) ()
-
-// // Serialize envelope
-// data, err = proto.Marshal(&ev)
-// if err != nil {
-// 	return nil, err
-// }
-
-// ch := pb.Channel{}
-// err := proto.Unmarshal(db.Get(makeLevelKey("channel", chID)), &ch)
-// if err != nil {
-// 	return nil, err
-// }
-
-func VerifyUpdateTxProposal(ev *pb.Envelope, ch *pb.Channel) (uint32, error) {
+func VerifyUpdateTxProposal(ev *Envelope, ch *Channel) (uint32, error) {
 	var pubkey [32]byte
 	var sig [64]byte
 
@@ -201,7 +114,7 @@ func VerifyUpdateTxProposal(ev *pb.Envelope, ch *pb.Channel) (uint32, error) {
 		return 0, errors.New("invalid signature")
 	}
 
-	utx := pb.UpdateTx{}
+	utx := UpdateTx{}
 	err := proto.Unmarshal(ev.Payload, &utx)
 	if err != nil {
 		return 0, err
@@ -226,10 +139,86 @@ func VerifyUpdateTxProposal(ev *pb.Envelope, ch *pb.Channel) (uint32, error) {
 	return amt, nil
 }
 
-func makeLevelKey(indexes ...string) []byte {
-	return []byte(strings.Join(indexes, ":"))
+func randomBytes(c uint) ([]byte, error) {
+	b := make([]byte, c)
+	n, err := io.ReadFull(rand.Reader, b)
+	if n != len(b) || err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
-func MakeKeypair() (*[PublicKeySize]byte, *[PrivateKeySize]byte, error) {
-	return ed25519.GenerateKey(rand.Reader)
+func NewChannel(ident Identity, peer Peer, myAmount uint32, theirAmount uint32, holdPeriod uint32) (*Channel, error) {
+	chID, err := randomBytes(32)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := &Channel{
+		ChannelID: chID,
+		OpeningTx: &OpeningTx{
+			ChannelID:  chID,
+			Pubkey1:    ident.Pubkey,
+			Pubkey2:    peer.Pubkey,
+			Amount1:    myAmount,
+			Amount2:    theirAmount,
+			HoldPeriod: holdPeriod,
+		},
+		Me:    1,
+		State: Channel_PendingOpen,
+	}
+
+	// Serialize update transaction
+	data, err := proto.Marshal(ch.OpeningTx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Make new envelope
+	ch.OpeningTxEnvelope = &Envelope{
+		Type:       Envelope_UpdateTxProposal,
+		Payload:    data,
+		Signature1: ed25519.Sign(sliceTo64Byte(ident.Privkey), data)[:],
+	}
+
+	return ch, nil
 }
+
+func (ch *Channel) Close() (*Envelope, error) {
+	ev := ch.LastFullUpdateTxEnvelope
+
+	// Sign update transaction, convert signature to slice
+	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), ev.Payload)
+
+	// Put signature in correct slot
+	switch ch.Me {
+	case 1:
+		ev.Signature1 = sig[:]
+	case 2:
+		ev.Signature2 = sig[:]
+	}
+
+	// Change channel state to pending closed
+	ch.State = Channel_PendingClosed
+
+	return ev, nil
+}
+
+func (ch *Channel) ConfirmClose(utx *UpdateTx) {
+	ch.LastUpdateTx = utx
+	ch.LastFullUpdateTx = utx
+	// Change channel state to closed
+	ch.State = Channel_Closed
+}
+
+// func CoopClose(ch *Channel) (*Envelope, error) {
+
+// }
+
+// func makeLevelKey(indexes ...string) []byte {
+// 	return []byte(strings.Join(indexes, ":"))
+// }
+
+// func MakeKeypair() (*[PublicKeySize]byte, *[PrivateKeySize]byte, error) {
+// 	return ed25519.GenerateKey(rand.Reader)
+// }

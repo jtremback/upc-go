@@ -1,8 +1,8 @@
 syntax = "proto3";
-package pb;
+package main;
 
 message OpeningTx {
-  string channelID = 1;
+  bytes channelID = 1;
   bytes pubkey1 = 2;
   bytes pubkey2 = 3;
   uint32 amount1 = 4;
@@ -11,7 +11,7 @@ message OpeningTx {
 }
 
 message UpdateTx {
-  string channelID = 1;
+  bytes channelID = 1;
   sint64 netTransfer = 2;
   uint32 sequenceNumber = 3;
   bool fast = 4;
@@ -26,7 +26,7 @@ message UpdateTx {
 }
 
 message Fulfillment {
-  string channelID = 1;
+  bytes channelID = 1;
   uint32 condition = 2;
   string data = 3;
 }
@@ -47,7 +47,7 @@ message Envelope {
 }
 
 message Channel {
-  string channelID = 1;
+  bytes channelID = 1;
 
   OpeningTx openingTx = 2;
   Envelope openingTxEnvelope = 3;
@@ -59,6 +59,14 @@ message Channel {
   Envelope lastFullUpdateTxEnvelope = 7;
 
   uint32 me = 8;
+
+  enum State {
+    PendingOpen = 0;
+    Open = 1;
+    PendingClosed = 2;
+    Closed = 3;
+  }
+  State state = 9;
 }
 
 message Identity {
