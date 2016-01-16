@@ -1,0 +1,24 @@
+syntax = "proto3";
+import "github.com/jtremback/upc/wire/wire.proto";
+
+package escrow;
+
+message Channel {
+  bytes channelID = 1;
+
+  wire.OpeningTx openingTx = 2;
+  wire.Envelope openingTxEnvelope = 3;
+
+  wire.UpdateTx lastFullUpdateTx = 6;
+  wire.Envelope lastFullUpdateTxEnvelope = 7;
+
+  enum State {
+    PendingOpen = 0;
+    Open = 1;
+    PendingClosed = 2;
+    Closed = 3;
+  }
+  State state = 9;
+  Identity identity1 = 10;
+  Identity identity2 = 11;
+}

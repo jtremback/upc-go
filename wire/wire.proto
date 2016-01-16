@@ -1,5 +1,5 @@
 syntax = "proto3";
-package main;
+package wire;
 
 message OpeningTx {
   bytes channelID = 1;
@@ -44,40 +44,4 @@ message Envelope {
   bytes payload = 2;
   bytes signature1 = 3;
   bytes signature2 = 4;
-}
-
-message Channel {
-  bytes channelID = 1;
-
-  OpeningTx openingTx = 2;
-  Envelope openingTxEnvelope = 3;
-
-  UpdateTx lastUpdateTx = 4;
-  Envelope lastUpdateTxEnvelope = 5;
-
-  UpdateTx lastFullUpdateTx = 6;
-  Envelope lastFullUpdateTxEnvelope = 7;
-
-  uint32 me = 8;
-
-  enum State {
-    PendingOpen = 0;
-    Open = 1;
-    PendingClosed = 2;
-    Closed = 3;
-  }
-  State state = 9;
-}
-
-message Identity {
-  string nickname = 1;
-  bytes pubkey = 2;
-  bytes privkey = 3;
-  repeated string channels = 4;
-}
-
-message Peer {
-  string nickname = 1;
-  bytes pubkey = 2;
-  repeated string channels = 3;
 }

@@ -1,21 +1,15 @@
-package main
+package peer
 
 import (
-	// "bytes"
 	"crypto/rand"
-	// "strings"
-	// "encoding/binary"
-	// "encoding/json"
 	"errors"
-	"io"
-	// "fmt"
 	"github.com/agl/ed25519"
 	"github.com/golang/protobuf/proto"
-	// "github.com/jtremback/upc/memdb"
-	// "log"
+	"github.com/jtremback/upc/wire"
+	"io"
 )
 
-func calcConditionalTransfer(lst *UpdateTx) int64 {
+func calcConditionalTransfer(lst *wire.UpdateTx) int64 {
 	// Sum up all conditional transfer amounts and add to net transfer
 	var ct int64
 	for _, v := range lst.Conditions {
@@ -25,8 +19,44 @@ func calcConditionalTransfer(lst *UpdateTx) int64 {
 	return ct
 }
 
-// NewUpdateTxProposal makes a new UpdateTx with NetTransfer changed to add amt
-func NewUpdateTxProposal(amount uint32, ch *Channel) (*UpdateTx, error) {
+func NewChannel(ident *Identity, peer *Peer, myAmount uint32, theirAmount uint32, holdPeriod uint32) (*Channel, error) {
+	chID, err := randomBytes(32)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := &Channel{
+		ChannelID: chID,
+		OpeningTx: &wire.OpeningTx{
+			ChannelID:  chID,
+			Pubkey1:    ident.Pubkey,
+			Pubkey2:    peer.Pubkey,
+			Amount1:    myAmount,
+			Amount2:    theirAmount,
+			HoldPeriod: holdPeriod,
+		},
+		Me:    1,
+		State: Channel_PendingOpen,
+	}
+
+	// Serialize update transaction
+	data, err := proto.Marshal(ch.OpeningTx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Make new envelope
+	ch.OpeningTxEnvelope = &wire.Envelope{
+		Type:       wire.Envelope_UpdateTxProposal,
+		Payload:    data,
+		Signature1: ed25519.Sign(sliceTo64Byte(ident.Privkey), data)[:],
+	}
+
+	return ch, nil
+}
+
+// NewUpdateTxProposal makes a new wire.UpdateTx with NetTransfer changed to add amt
+func (ch *Channel) NewUpdateTxProposal(amount uint32) (*wire.UpdateTx, error) {
 	lst := ch.LastUpdateTx
 	nt := lst.NetTransfer
 
@@ -47,7 +77,7 @@ func NewUpdateTxProposal(amount uint32, ch *Channel) (*UpdateTx, error) {
 	}
 
 	// Make new update transaction
-	return &UpdateTx{
+	return &wire.UpdateTx{
 		ChannelID:      ch.ChannelID,
 		NetTransfer:    nt,
 		SequenceNumber: lst.SequenceNumber + 1,
@@ -67,7 +97,7 @@ func sliceTo32Byte(slice []byte) *[32]byte {
 	return &array
 }
 
-func SignUpdateTxProposal(utx *UpdateTx, ident *Identity, ch *Channel) (*Envelope, error) {
+func (ch *Channel) SignUpdateTxProposal(utx *wire.UpdateTx) (*wire.Envelope, error) {
 	// Serialize update transaction
 	data, err := proto.Marshal(utx)
 	if err != nil {
@@ -75,11 +105,11 @@ func SignUpdateTxProposal(utx *UpdateTx, ident *Identity, ch *Channel) (*Envelop
 	}
 
 	// Sign update transaction, convert signature to slice
-	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), data)
+	sig := ed25519.Sign(sliceTo64Byte(ch.Identity.Privkey), data)
 
 	// Make new envelope
-	ev := Envelope{
-		Type:    Envelope_UpdateTxProposal,
+	ev := wire.Envelope{
+		Type:    wire.Envelope_UpdateTxProposal,
 		Payload: data,
 	}
 
@@ -94,7 +124,11 @@ func SignUpdateTxProposal(utx *UpdateTx, ident *Identity, ch *Channel) (*Envelop
 	return &ev, nil
 }
 
-func VerifyUpdateTxProposal(ev *Envelope, ch *Channel) (uint32, error) {
+func (ch *Channel) VerifyUpdateTxProposal(ev *wire.Envelope) (uint32, error) {
+	if ch.State != Channel_Open {
+		return 0, errors.New("channel must be open")
+	}
+
 	var pubkey [32]byte
 	var sig [64]byte
 
@@ -114,7 +148,7 @@ func VerifyUpdateTxProposal(ev *Envelope, ch *Channel) (uint32, error) {
 		return 0, errors.New("invalid signature")
 	}
 
-	utx := UpdateTx{}
+	utx := wire.UpdateTx{}
 	err := proto.Unmarshal(ev.Payload, &utx)
 	if err != nil {
 		return 0, err
@@ -148,46 +182,13 @@ func randomBytes(c uint) ([]byte, error) {
 	return b, nil
 }
 
-func NewChannel(ident Identity, peer Peer, myAmount uint32, theirAmount uint32, holdPeriod uint32) (*Channel, error) {
-	chID, err := randomBytes(32)
-	if err != nil {
-		return nil, err
+func (ch *Channel) GetClosingUpdateTx() (*wire.Envelope, error) {
+	if ch.State != Channel_Open {
+		return nil, errors.New("channel must be open")
 	}
-
-	ch := &Channel{
-		ChannelID: chID,
-		OpeningTx: &OpeningTx{
-			ChannelID:  chID,
-			Pubkey1:    ident.Pubkey,
-			Pubkey2:    peer.Pubkey,
-			Amount1:    myAmount,
-			Amount2:    theirAmount,
-			HoldPeriod: holdPeriod,
-		},
-		Me:    1,
-		State: Channel_PendingOpen,
-	}
-
-	// Serialize update transaction
-	data, err := proto.Marshal(ch.OpeningTx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Make new envelope
-	ch.OpeningTxEnvelope = &Envelope{
-		Type:       Envelope_UpdateTxProposal,
-		Payload:    data,
-		Signature1: ed25519.Sign(sliceTo64Byte(ident.Privkey), data)[:],
-	}
-
-	return ch, nil
-}
-
-func (ch *Channel) Close() (*Envelope, error) {
 	ev := ch.LastFullUpdateTxEnvelope
 
-	// Sign update transaction, convert signature to slice
+	// Sign update transaction
 	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), ev.Payload)
 
 	// Put signature in correct slot
@@ -198,27 +199,25 @@ func (ch *Channel) Close() (*Envelope, error) {
 		ev.Signature2 = sig[:]
 	}
 
-	// Change channel state to pending closed
-	ch.State = Channel_PendingClosed
-
 	return ev, nil
 }
 
-func (ch *Channel) ConfirmClose(utx *UpdateTx) {
+// ConfirmClose is called when we receive word from the bank that the channel is permanently closed
+func (ch *Channel) ConfirmClose(utx *wire.UpdateTx) error {
+	if ch.State != Channel_PendingClosed {
+		return errors.New("channel must be pending closed")
+	}
 	ch.LastUpdateTx = utx
 	ch.LastFullUpdateTx = utx
 	// Change channel state to closed
 	ch.State = Channel_Closed
+	return nil
 }
 
-// func CoopClose(ch *Channel) (*Envelope, error) {
-
-// }
-
 // func makeLevelKey(indexes ...string) []byte {
-// 	return []byte(strings.Join(indexes, ":"))
+//   return []byte(strings.Join(indexes, ":"))
 // }
 
 // func MakeKeypair() (*[PublicKeySize]byte, *[PrivateKeySize]byte, error) {
-// 	return ed25519.GenerateKey(rand.Reader)
+//   return ed25519.GenerateKey(rand.Reader)
 // }
