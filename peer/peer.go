@@ -5,9 +5,34 @@ import (
 	"errors"
 	"github.com/agl/ed25519"
 	"github.com/golang/protobuf/proto"
+	"github.com/jtremback/upc/schema"
 	"github.com/jtremback/upc/wire"
 	"io"
 )
+
+type Channel schema.Channel
+type Identity schema.Identity
+
+func sliceTo64Byte(slice []byte) *[64]byte {
+	var array [64]byte
+	copy(array[:], slice[:64])
+	return &array
+}
+
+func sliceTo32Byte(slice []byte) *[32]byte {
+	var array [32]byte
+	copy(array[:], slice[:32])
+	return &array
+}
+
+func randomBytes(c uint) ([]byte, error) {
+	b := make([]byte, c)
+	n, err := io.ReadFull(rand.Reader, b)
+	if n != len(b) || err != nil {
+		return nil, err
+	}
+	return b, nil
+}
 
 func calcConditionalTransfer(lst *wire.UpdateTx) int64 {
 	// Sum up all conditional transfer amounts and add to net transfer
@@ -19,7 +44,7 @@ func calcConditionalTransfer(lst *wire.UpdateTx) int64 {
 	return ct
 }
 
-func NewChannel(ident *Identity, peer *Peer, myAmount uint32, theirAmount uint32, holdPeriod uint32) (*Channel, error) {
+func NewChannel(ident1 *Identity, ident2 *Identity, amount1 uint32, amount2 uint32, holdPeriod uint32) (*Channel, error) {
 	chID, err := randomBytes(32)
 	if err != nil {
 		return nil, err
@@ -29,14 +54,14 @@ func NewChannel(ident *Identity, peer *Peer, myAmount uint32, theirAmount uint32
 		ChannelID: chID,
 		OpeningTx: &wire.OpeningTx{
 			ChannelID:  chID,
-			Pubkey1:    ident.Pubkey,
-			Pubkey2:    peer.Pubkey,
-			Amount1:    myAmount,
-			Amount2:    theirAmount,
+			Pubkey1:    ident1.Pubkey,
+			Pubkey2:    ident2.Pubkey,
+			Amount1:    amount1,
+			Amount2:    amount2,
 			HoldPeriod: holdPeriod,
 		},
 		Me:    1,
-		State: Channel_PendingOpen,
+		State: schema.Channel_PendingOpen,
 	}
 
 	// Serialize update transaction
@@ -85,47 +110,8 @@ func (ch *Channel) NewUpdateTxProposal(amount uint32) (*wire.UpdateTx, error) {
 	}, nil
 }
 
-func sliceTo64Byte(slice []byte) *[64]byte {
-	var array [64]byte
-	copy(array[:], slice[:64])
-	return &array
-}
-
-func sliceTo32Byte(slice []byte) *[32]byte {
-	var array [32]byte
-	copy(array[:], slice[:32])
-	return &array
-}
-
-func (ch *Channel) SignUpdateTxProposal(utx *wire.UpdateTx) (*wire.Envelope, error) {
-	// Serialize update transaction
-	data, err := proto.Marshal(utx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Sign update transaction, convert signature to slice
-	sig := ed25519.Sign(sliceTo64Byte(ch.Identity.Privkey), data)
-
-	// Make new envelope
-	ev := wire.Envelope{
-		Type:    wire.Envelope_UpdateTxProposal,
-		Payload: data,
-	}
-
-	// Put signature in correct slot
-	switch ch.Me {
-	case 1:
-		ev.Signature1 = sig[:]
-	case 2:
-		ev.Signature2 = sig[:]
-	}
-
-	return &ev, nil
-}
-
 func (ch *Channel) VerifyUpdateTxProposal(ev *wire.Envelope) (uint32, error) {
-	if ch.State != Channel_Open {
+	if ch.State != schema.Channel_Open {
 		return 0, errors.New("channel must be open")
 	}
 
@@ -173,44 +159,34 @@ func (ch *Channel) VerifyUpdateTxProposal(ev *wire.Envelope) (uint32, error) {
 	return amt, nil
 }
 
-func randomBytes(c uint) ([]byte, error) {
-	b := make([]byte, c)
-	n, err := io.ReadFull(rand.Reader, b)
-	if n != len(b) || err != nil {
-		return nil, err
-	}
-	return b, nil
-}
-
-func (ch *Channel) GetClosingUpdateTx() (*wire.Envelope, error) {
-	if ch.State != Channel_Open {
-		return nil, errors.New("channel must be open")
-	}
-	ev := ch.LastFullUpdateTxEnvelope
-
-	// Sign update transaction
-	sig := ed25519.Sign(sliceTo64Byte(ident.Privkey), ev.Payload)
-
+func (ch *Channel) SignEnvelope(ev wire.Envelope) (*wire.Envelope, error) {
 	// Put signature in correct slot
 	switch ch.Me {
 	case 1:
-		ev.Signature1 = sig[:]
+		ev.Signature1 = ed25519.Sign(sliceTo64Byte(ch.Identity1.Privkey), ev.Payload)[:]
 	case 2:
-		ev.Signature2 = sig[:]
+		ev.Signature2 = ed25519.Sign(sliceTo64Byte(ch.Identity2.Privkey), ev.Payload)[:]
 	}
 
-	return ev, nil
+	return &ev, nil
+}
+
+func (ch *Channel) GetClosingUpdateTx() (*wire.Envelope, error) {
+	if ch.State != schema.Channel_Open {
+		return nil, errors.New("channel must be open")
+	}
+	return ch.LastFullUpdateTxEnvelope, nil
 }
 
 // ConfirmClose is called when we receive word from the bank that the channel is permanently closed
 func (ch *Channel) ConfirmClose(utx *wire.UpdateTx) error {
-	if ch.State != Channel_PendingClosed {
+	if ch.State != schema.Channel_PendingClosed {
 		return errors.New("channel must be pending closed")
 	}
 	ch.LastUpdateTx = utx
 	ch.LastFullUpdateTx = utx
 	// Change channel state to closed
-	ch.State = Channel_Closed
+	ch.State = schema.Channel_Closed
 	return nil
 }
 

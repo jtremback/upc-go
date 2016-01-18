@@ -1,0 +1,43 @@
+syntax = "proto3";
+import "github.com/jtremback/upc/wire/wire.proto";
+
+package schema;
+
+message Channel {
+  enum State {
+    PendingOpen = 0;
+    Open = 1;
+    PendingClosed = 2;
+    Closed = 3;
+  }
+  bytes channelID = 1;
+  State state = 2;
+
+  wire.OpeningTx openingTx = 3;
+  wire.Envelope openingTxEnvelope = 4;
+
+  wire.UpdateTx lastUpdateTx = 5;
+  wire.Envelope lastUpdateTxEnvelope = 6;
+
+  wire.UpdateTx lastFullUpdateTx = 7;
+  wire.Envelope lastFullUpdateTxEnvelope = 8;
+
+  Identity identity0 = 9;
+  Identity identity1 = 10;
+  Identity identity2 = 11;
+
+  enum Party {
+    Escrow = 0;
+    Party1 = 1;
+    Party2 = 2;
+  }
+
+  Party me = 12;
+}
+
+message Identity {
+  string name = 1;
+  bytes pubkey = 2;
+  bytes privkey = 3;
+  repeated bytes channels = 4;
+}

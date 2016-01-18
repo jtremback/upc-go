@@ -9,14 +9,14 @@ import (
 	"io"
 )
 
-func NewChannel(ev *wire.Envelope) (Channel, error) {
+func ChannelFromOpeningTx(ev *wire.Envelope) (Channel, error) {
 	err := VerifySignatures(ev)
 	if err != nil {
 		return err
 	}
 
 	otx := wire.OpeningTx{}
-	err := proto.Unmarshal(ev.Payload, &otx)
+	err = proto.Unmarshal(ev.Payload, &otx)
 	if err != nil {
 		return nil, err
 	}

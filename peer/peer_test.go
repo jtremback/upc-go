@@ -54,9 +54,9 @@ var ch2 = &Channel{
 	Me: 2,
 }
 
-func TestNewChannel(t *testing.T) {
-	NewChannel(ident, ident2, 100, 100, holdPeriod)
-}
+// func TestNewChannel(t *testing.T) {
+// 	NewChannel(ident, ident2, 100, 100, holdPeriod)
+// }
 
 func TestNewUpdateTxProposal(t *testing.T) {
 	ideal := &wire.UpdateTx{
