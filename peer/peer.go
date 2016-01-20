@@ -171,10 +171,11 @@ func (ch *Channel) SignEnvelope(ev wire.Envelope) (*wire.Envelope, error) {
 	return &ev, nil
 }
 
-func (ch *Channel) GetClosingUpdateTx() (*wire.Envelope, error) {
+func (ch *Channel) StartClose() (*wire.Envelope, error) {
 	if ch.State != schema.Channel_Open {
 		return nil, errors.New("channel must be open")
 	}
+	ch.State = schema.Channel_PendingClosed
 	return ch.LastFullUpdateTxEnvelope, nil
 }
 

@@ -17,17 +17,17 @@ message UpdateTx {
   bool fast = 4;
 
   message Condition {
-    uint32 presetCondition = 1;
+    string presetCondition = 1;
     int64 conditionalTransfer = 2;
     string data = 3;
   }
 
-  repeated Condition conditions = 5;
+  map<string, Condition> conditions = 5;
 }
 
 message Fulfillment {
   bytes channelID = 1;
-  uint32 condition = 2;
+  string condition = 2;
   string data = 3;
 }
 

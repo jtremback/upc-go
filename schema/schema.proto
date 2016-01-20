@@ -33,6 +33,7 @@ message Channel {
   }
 
   Party me = 12;
+  repeated wire.Fulfillment fulfillments = 13;
 }
 
 message Identity {
