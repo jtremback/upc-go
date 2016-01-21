@@ -6,6 +6,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/jtremback/upc/schema"
 	"github.com/jtremback/upc/wire"
+	"math"
 	"math/big"
 )
 
@@ -37,6 +38,26 @@ func sliceTo32Byte(slice []byte) *[32]byte {
 	return &array
 }
 
+// VerifyOpeningTx checks the signatures of an OpeningTx, unmarshals it and returns it.
+func VerifyOpeningTx(ev *wire.Envelope) (*wire.OpeningTx, error) {
+	otx := wire.OpeningTx{}
+	err := proto.Unmarshal(ev.Payload, &otx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check signatures
+	if !ed25519.Verify(sliceTo32Byte(otx.Pubkey1), ev.Payload, sliceTo64Byte(ev.Signature1)) {
+		return nil, errors.New("signature 1 invalid")
+	}
+	if !ed25519.Verify(sliceTo32Byte(otx.Pubkey2), ev.Payload, sliceTo64Byte(ev.Signature2)) {
+		return nil, errors.New("signature 2 invalid")
+	}
+
+	return &otx, nil
+}
+
+// VerifyUpdateTx checks the signatures of an UpdateTx, unmarshals it and returns it.
 func (ch *Channel) VerifyUpdateTx(ev *wire.Envelope) (*wire.UpdateTx, error) {
 	// Check signatures
 	if !ed25519.Verify(sliceTo32Byte(ch.OpeningTx.Pubkey1), ev.Payload, sliceTo64Byte(ev.Signature1)) {
@@ -67,38 +88,14 @@ func (ch *Channel) StartClose(utx *wire.UpdateTx) error {
 	return nil
 }
 
-// func calcConditionalTransfer(lst *wire.UpdateTx) int64 {
-// 	// Sum up all conditional transfer amounts and add to net transfer
-// 	var ct int64
-// 	for _, v := range lst.Conditions {
-// 		ct += v.ConditionalTransfer
-// 	}
-
-// 	return ct
-// }
-
-// func calcConditionalTransfer(ful *wire.Fulfillment, utx *wire.UpdateTx) int64 {
-// 	// Sum up all conditional transfer amounts and add to net transfer
-// 	var ct int64
-// 	for _, v := range utx.Conditions {
-// 		if
-// 	}
-
-// 	return ct
-// }
-
-type ConditionContext struct {
-	Name            string
-	ConditionData   string
-	FulfillmentData string
-}
-
+// AddFulfillment verifies a fulfillment's signature and adds it to the Channel's
+// Fulfillments array.
 func (ch *Channel) AddFulfillment(ev *wire.Envelope, eval func()) error {
 	if ch.State != schema.Channel_PendingClosed {
 		return errors.New("channel must be pending closed")
 	}
 
-	if !ed25519.Verify(sliceTo32Byte(ch.OpeningTx.Pubkey1), ev.Payload, sliceTo64Byte(ev.Signature1)) &&
+	if !ed25519.Verify(sliceTo32Byte(ch.OpeningTx.Pubkey1), ev.Payload, sliceTo64Byte(ev.Signature1)) ||
 		!ed25519.Verify(sliceTo32Byte(ch.OpeningTx.Pubkey2), ev.Payload, sliceTo64Byte(ev.Signature1)) {
 		return errors.New("signature invalid")
 	}
@@ -122,7 +119,14 @@ func parseConditionalMultiplier(s string) (*big.Rat, error) {
 	return rat, nil
 }
 
-// EvaluateConditions takes a function fn that takes 3 string arguments-
+func round(input float64) float64 {
+	if input < 0 {
+		return math.Ceil(input - 0.5)
+	}
+	return math.Floor(input + 0.5)
+}
+
+// EvaluateConditions takes a function `fn` that takes 3 string arguments-
 // Name, ConditionalData, and FulfillmentData. Name is the name of the Condition,
 // ConditionalData was supplied by the condition (signed by both parties), and
 // FulfillmentData was supplied by the Fulfillment (signed by both parties).
@@ -168,9 +172,7 @@ func (ch *Channel) EvaluateConditions(fn func(string, string, string) string) (i
 		nt.Add(nt, r.Mul(big.NewRat(cond.ConditionalTransfer, 1), cm))
 	}
 
-	return (nt.Num().Int64() / nt.Denom().Int64()), nil
+	n, _ := nt.Float64()
+
+	return int64(round(n)), nil
 }
-
-// func (ch *Channel) FinalizeClose() {
-
-// }

@@ -2,7 +2,7 @@ syntax = "proto3";
 package wire;
 
 message OpeningTx {
-  bytes channelID = 1;
+  string channelID = 1;
   bytes pubkey1 = 2;
   bytes pubkey2 = 3;
   uint32 amount1 = 4;
@@ -11,7 +11,7 @@ message OpeningTx {
 }
 
 message UpdateTx {
-  bytes channelID = 1;
+  string channelID = 1;
   sint64 netTransfer = 2;
   uint32 sequenceNumber = 3;
   bool fast = 4;
@@ -26,7 +26,7 @@ message UpdateTx {
 }
 
 message Fulfillment {
-  bytes channelID = 1;
+  string channelID = 1;
   string condition = 2;
   string data = 3;
 }

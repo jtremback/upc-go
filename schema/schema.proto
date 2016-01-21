@@ -10,7 +10,7 @@ message Channel {
     PendingClosed = 2;
     Closed = 3;
   }
-  bytes channelID = 1;
+  string channelID = 1;
   State state = 2;
 
   wire.OpeningTx openingTx = 3;
@@ -40,5 +40,5 @@ message Identity {
   string name = 1;
   bytes pubkey = 2;
   bytes privkey = 3;
-  repeated bytes channels = 4;
+  repeated string channels = 4;
 }

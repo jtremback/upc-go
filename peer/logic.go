@@ -44,8 +44,18 @@ func calcConditionalTransfer(lst *wire.UpdateTx) int64 {
 	return ct
 }
 
-func NewChannel(ident1 *Identity, ident2 *Identity, amount1 uint32, amount2 uint32, holdPeriod uint32) (*Channel, error) {
-	chID, err := randomBytes(32)
+// NewChannel makes a new channel with the supplied information. `ident1` must
+// have a valid private key, and is assumed to correspond to an account that
+// we control.
+func NewChannel(
+	ident1 *Identity,
+	ident2 *Identity,
+	amount1 uint32,
+	amount2 uint32,
+	holdPeriod uint32,
+) (*Channel, error) {
+	b, err := randomBytes(32)
+	chID := string(b)
 	if err != nil {
 		return nil, err
 	}
@@ -74,23 +84,23 @@ func NewChannel(ident1 *Identity, ident2 *Identity, amount1 uint32, amount2 uint
 	ch.OpeningTxEnvelope = &wire.Envelope{
 		Type:       wire.Envelope_UpdateTxProposal,
 		Payload:    data,
-		Signature1: ed25519.Sign(sliceTo64Byte(ident.Privkey), data)[:],
+		Signature1: ed25519.Sign(sliceTo64Byte(ident1.Privkey), data)[:],
 	}
 
 	return ch, nil
 }
 
-// NewUpdateTxProposal makes a new wire.UpdateTx with NetTransfer changed to add amt
-func (ch *Channel) NewUpdateTxProposal(amount uint32) (*wire.UpdateTx, error) {
+// NewUpdateTxProposal makes a new UpdateTx with NetTransfer changed by amount.
+func (ch *Channel) NewUpdateTxProposal(amount int64) (*wire.UpdateTx, error) {
 	lst := ch.LastUpdateTx
 	nt := lst.NetTransfer
 
 	// Check if we are pubkey1 or pubkey2 and add or subtract amount from net transfer
 	switch ch.Me {
 	case 1:
-		nt += int64(amount)
+		nt += amount
 	case 2:
-		nt -= int64(amount)
+		nt -= amount
 	}
 
 	// Add conditional transfer
@@ -110,6 +120,7 @@ func (ch *Channel) NewUpdateTxProposal(amount uint32) (*wire.UpdateTx, error) {
 	}, nil
 }
 
+// VerifyUpdateTxProposal
 func (ch *Channel) VerifyUpdateTxProposal(ev *wire.Envelope) (uint32, error) {
 	if ch.State != schema.Channel_Open {
 		return 0, errors.New("channel must be open")
@@ -138,6 +149,11 @@ func (ch *Channel) VerifyUpdateTxProposal(ev *wire.Envelope) (uint32, error) {
 	err := proto.Unmarshal(ev.Payload, &utx)
 	if err != nil {
 		return 0, err
+	}
+
+	// Check ChannelID
+	if utx.ChannelID != ch.OpeningTx.ChannelID {
+		return 0, errors.New("")
 	}
 
 	lst := ch.LastUpdateTx
